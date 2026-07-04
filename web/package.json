@@ -1,5 +1,5 @@
 {
-  "name": "@APPNAME/web",
+  "name": "@beat-star/web",
   "private": true,
   "type": "module",
   "scripts": {
