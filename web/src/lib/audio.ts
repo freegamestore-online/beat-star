@@ -15,6 +15,11 @@ let currentSong: Song | null = null;
 let noteIndex = 0;
 let songPlaying = false;
 
+/** How long (seconds) the star travels before reaching the hit line.
+ *  The audio note is scheduled this many seconds in the future,
+ *  so the star arrives at the hit zone exactly when the note sounds. */
+export const STAR_TRAVEL_TIME = 1.8;
+
 export function getAudioContext(): AudioContext | null {
   if (!ctx) {
     try {
@@ -48,77 +53,45 @@ export function resumeAudio(): void {
   if (c && c.state === "suspended") c.resume().catch(() => {});
 }
 
-// ─── Instrument synthesizers ──────────────────────────────────────────────────
+// ─── Piano note synthesizer ───────────────────────────────────────────────────
 
-function playNote(
-  freq: number,
-  duration: number,
-  vol = 0.18,
-  type: OscillatorType = "triangle",
-  target: GainNode | null = sfxGain
-): void {
-  const c = getAudioContext();
-  if (!c || !target) return;
-  if (freq <= 0) return; // REST
-
-  const osc = c.createOscillator();
-  const gain = c.createGain();
-  osc.connect(gain);
-  gain.connect(target);
-  osc.type = type;
-  osc.frequency.setValueAtTime(freq, c.currentTime);
-
-  gain.gain.setValueAtTime(0, c.currentTime);
-  gain.gain.linearRampToValueAtTime(vol, c.currentTime + 0.01);
-  gain.gain.setValueAtTime(vol, c.currentTime + duration * 0.6);
-  gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + duration);
-
-  osc.start(c.currentTime);
-  osc.stop(c.currentTime + duration + 0.01);
-}
-
-/** Piano-like tone: triangle + slight detuned sawtooth for warmth */
-function playPianoNote(freq: number, duration: number, vol = 0.22): void {
+/** Schedule a piano-like note to play at `startAt` (AudioContext time). */
+function schedulePianoNote(freq: number, duration: number, vol: number, startAt: number): void {
   const c = getAudioContext();
   if (!c || !musicGain) return;
-  if (freq <= 0) return;
+  if (freq <= 0) return; // REST
 
-  // Main tone
   const osc1 = c.createOscillator();
   const osc2 = c.createOscillator();
-  const gain = c.createGain();
-  const gain2 = c.createGain();
+  const g1 = c.createGain();
+  const g2 = c.createGain();
 
-  osc1.connect(gain);
-  osc2.connect(gain2);
-  gain.connect(musicGain);
-  gain2.connect(musicGain);
+  osc1.connect(g1); g1.connect(musicGain);
+  osc2.connect(g2); g2.connect(musicGain);
 
   osc1.type = "triangle";
   osc2.type = "sine";
-  osc1.frequency.setValueAtTime(freq, c.currentTime);
-  osc2.frequency.setValueAtTime(freq * 2.001, c.currentTime); // slight octave shimmer
+  osc1.frequency.setValueAtTime(freq, startAt);
+  osc2.frequency.setValueAtTime(freq * 2.001, startAt);
 
-  // Attack-decay-sustain-release
-  gain.gain.setValueAtTime(0, c.currentTime);
-  gain.gain.linearRampToValueAtTime(vol, c.currentTime + 0.008);
-  gain.gain.exponentialRampToValueAtTime(vol * 0.6, c.currentTime + 0.05);
-  gain.gain.setValueAtTime(vol * 0.6, c.currentTime + duration * 0.7);
-  gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + duration);
+  // ADSR on g1
+  g1.gain.setValueAtTime(0, startAt);
+  g1.gain.linearRampToValueAtTime(vol, startAt + 0.008);
+  g1.gain.exponentialRampToValueAtTime(vol * 0.6, startAt + 0.05);
+  g1.gain.setValueAtTime(vol * 0.6, startAt + duration * 0.7);
+  g1.gain.exponentialRampToValueAtTime(0.001, startAt + duration);
 
-  gain2.gain.setValueAtTime(0, c.currentTime);
-  gain2.gain.linearRampToValueAtTime(vol * 0.15, c.currentTime + 0.01);
-  gain2.gain.exponentialRampToValueAtTime(0.001, c.currentTime + duration * 0.5);
+  g2.gain.setValueAtTime(0, startAt);
+  g2.gain.linearRampToValueAtTime(vol * 0.15, startAt + 0.01);
+  g2.gain.exponentialRampToValueAtTime(0.001, startAt + duration * 0.5);
 
-  osc1.start(c.currentTime);
-  osc1.stop(c.currentTime + duration + 0.01);
-  osc2.start(c.currentTime);
-  osc2.stop(c.currentTime + duration + 0.01);
+  osc1.start(startAt); osc1.stop(startAt + duration + 0.01);
+  osc2.start(startAt); osc2.stop(startAt + duration + 0.01);
 }
 
 // ─── Song playback ─────────────────────────────────────────────────────────────
 
-/** Callback called for each note: (note, noteIndex) */
+/** Called immediately when a star should be spawned (TRAVEL_TIME before the note sounds). */
 type NoteCallback = (note: SongNote, idx: number) => void;
 let onNoteCallback: NoteCallback | null = null;
 
@@ -135,17 +108,21 @@ function scheduleNextNote(): void {
   const beatDuration = 60 / song.bpm; // seconds per beat
   const noteDuration = note.dur * beatDuration;
 
-  // Play the note
-  playPianoNote(note.freq, noteDuration * 0.85, note.accent ? 0.28 : 0.18);
+  const c = getAudioContext();
+  if (c) {
+    // Schedule the audio TRAVEL_TIME seconds from now — star spawns NOW and arrives then
+    const playAt = c.currentTime + STAR_TRAVEL_TIME;
+    schedulePianoNote(note.freq, noteDuration * 0.85, note.accent ? 0.28 : 0.18, playAt);
+  }
 
-  // Notify game to spawn a star for this note
+  // Spawn the star immediately — it will reach the hit line in TRAVEL_TIME seconds
   if (onNoteCallback && note.freq > 0) {
     onNoteCallback(note, noteIndex % song.notes.length);
   }
 
   noteIndex++;
 
-  // Schedule next note
+  // Schedule next note callback after `noteDuration` ms
   songTimer = setTimeout(scheduleNextNote, noteDuration * 1000);
 }
 
@@ -173,28 +150,50 @@ export function getCurrentSong(): Song | null {
 
 // ─── SFX ──────────────────────────────────────────────────────────────────────
 
+function playSfxNote(
+  freq: number,
+  duration: number,
+  vol = 0.18,
+  type: OscillatorType = "triangle"
+): void {
+  if (muted) return;
+  const c = getAudioContext();
+  if (!c || !sfxGain) return;
+  if (freq <= 0) return;
+  const osc = c.createOscillator();
+  const gain = c.createGain();
+  osc.connect(gain);
+  gain.connect(sfxGain);
+  osc.type = type;
+  osc.frequency.setValueAtTime(freq, c.currentTime);
+  gain.gain.setValueAtTime(vol, c.currentTime);
+  gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + duration);
+  osc.start(c.currentTime);
+  osc.stop(c.currentTime + duration + 0.01);
+}
+
 export function playPerfect(): void {
   if (muted) return;
   const c = getAudioContext();
   if (!c || !sfxGain) return;
   [523, 659, 784].forEach((freq, i) => {
+    const at = c.currentTime + i * 0.04;
     const osc = c.createOscillator();
     const gain = c.createGain();
     osc.connect(gain);
     gain.connect(sfxGain!);
     osc.type = "triangle";
-    osc.frequency.setValueAtTime(freq, c.currentTime + i * 0.04);
-    gain.gain.setValueAtTime(0.18, c.currentTime + i * 0.04);
-    gain.gain.exponentialRampToValueAtTime(0.001, c.currentTime + i * 0.04 + 0.12);
-    osc.start(c.currentTime + i * 0.04);
-    osc.stop(c.currentTime + i * 0.04 + 0.15);
+    osc.frequency.setValueAtTime(freq, at);
+    gain.gain.setValueAtTime(0.2, at);
+    gain.gain.exponentialRampToValueAtTime(0.001, at + 0.12);
+    osc.start(at);
+    osc.stop(at + 0.15);
   });
 }
 
 export function playGood(): void {
   if (muted) return;
-  playNote(660, 0.1, 0.14, "sine", sfxGain);
-  playNote(880, 0.08, 0.1, "sine", sfxGain);
+  playSfxNote(660, 0.1, 0.14, "sine");
 }
 
 export function playMiss(): void {
@@ -216,5 +215,5 @@ export function playMiss(): void {
 
 export function playMenuClick(): void {
   if (muted) return;
-  playNote(440, 0.05, 0.1, "sine", sfxGain);
+  playSfxNote(440, 0.05, 0.1, "sine");
 }

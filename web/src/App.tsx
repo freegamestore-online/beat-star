@@ -13,6 +13,7 @@ import {
   startSong,
   stopSong,
   setNoteCallback,
+  STAR_TRAVEL_TIME,
 } from "./lib/audio";
 import { SONGS } from "./lib/songs";
 import type { Song, SongNote } from "./lib/songs";
@@ -20,15 +21,16 @@ import type { FallingStar, HitEffect, Particle, GameState, StarLane } from "./ty
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const LANES = 4;
-const HIT_ZONE = 0.86;
-const PERFECT_WINDOW = 0.07;
-const GOOD_WINDOW = 0.13;
+const HIT_ZONE = 0.86;          // normalized Y of the hit line (0=top, 1=bottom)
+const PERFECT_WINDOW = 0.055;   // ± fraction of canvas height
+const GOOD_WINDOW    = 0.11;
+// Star speed: must travel from y=0 to y=HIT_ZONE in exactly STAR_TRAVEL_TIME seconds
+const STAR_SPEED = HIT_ZONE / STAR_TRAVEL_TIME;
+
 const STAR_COLORS = ["#f59e0b", "#ec4899", "#6366f1", "#10b981"];
-const LANE_KEYS = ["a", "s", "k", "l"];
+const LANE_KEYS   = ["a", "s", "k", "l"];
 const LANE_LABELS = ["A", "S", "K", "L"];
-const MAX_LIVES = 5;
-// Travel time: star spawns and arrives at hit zone in this many seconds
-const TRAVEL_TIME = 1.8;
+const MAX_LIVES   = 5;
 
 let nextId = 1;
 
@@ -88,7 +90,7 @@ function drawStar5(
     const outerA = (Math.PI * 2 * i) / 5 - Math.PI / 2;
     const innerA = outerA + Math.PI / 5;
     if (i === 0) ctx.moveTo(cx + Math.cos(outerA) * r, cy + Math.sin(outerA) * r);
-    else ctx.lineTo(cx + Math.cos(outerA) * r, cy + Math.sin(outerA) * r);
+    else         ctx.lineTo(cx + Math.cos(outerA) * r, cy + Math.sin(outerA) * r);
     ctx.lineTo(cx + Math.cos(innerA) * (r * 0.42), cy + Math.sin(innerA) * (r * 0.42));
   }
   ctx.closePath();
@@ -112,7 +114,6 @@ function SongSelect({
       className="flex flex-col h-full overflow-y-auto"
       style={{ background: "var(--paper)", color: "var(--ink)" }}
     >
-      {/* Header */}
       <div className="text-center pt-6 pb-4 px-4">
         <h1
           className="text-4xl font-bold mb-1"
@@ -121,11 +122,10 @@ function SongSelect({
           ✦ Beat Star
         </h1>
         <p className="text-sm" style={{ color: "var(--muted)" }}>
-          Choose a song and tap the falling stars!
+          Choose a song — tap the stars as they cross the line!
         </p>
       </div>
 
-      {/* Song cards */}
       <div className="flex flex-col gap-3 px-4 pb-6">
         {SONGS.map((song) => {
           const hs = highScores[song.id] ?? 0;
@@ -140,22 +140,20 @@ function SongSelect({
                 minHeight: 72,
               }}
             >
-              {/* Color dot */}
               <div
                 className="rounded-full flex-shrink-0 flex items-center justify-center text-2xl"
                 style={{
-                  width: 52,
-                  height: 52,
+                  width: 52, height: 52,
                   background: `${song.color}33`,
                   border: `2px solid ${song.color}88`,
                   boxShadow: `0 0 14px ${song.color}55`,
                 }}
               >
-                {song.id === "ode" ? "🎼" :
+                {song.id === "ode"      ? "🎼" :
                  song.id === "furelise" ? "🎹" :
-                 song.id === "canon" ? "🎻" :
-                 song.id === "twinkle" ? "⭐" :
-                 song.id === "rock" ? "🎸" : "🎂"}
+                 song.id === "canon"    ? "🎻" :
+                 song.id === "twinkle"  ? "⭐" :
+                 song.id === "rock"     ? "🎸" : "🎂"}
               </div>
 
               <div className="flex-1 min-w-0">
@@ -175,12 +173,7 @@ function SongSelect({
                 )}
               </div>
 
-              <div
-                className="text-lg flex-shrink-0"
-                style={{ color: song.color }}
-              >
-                ▶
-              </div>
+              <div className="text-lg flex-shrink-0" style={{ color: song.color }}>▶</div>
             </button>
           );
         })}
@@ -191,22 +184,21 @@ function SongSelect({
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const stateRef = useRef<GameState>(makeState());
+  const canvasRef    = useRef<HTMLCanvasElement>(null);
+  const stateRef     = useRef<GameState>(makeState());
   const activeSongRef = useRef<Song | null>(null);
 
-  const [screen, setScreen] = useState<"select" | "game">("select");
-  const [displayScore, setDisplayScore] = useState(0);
-  const [displayPhase, setDisplayPhase] = useState<"idle" | "playing" | "gameover">("idle");
-  const [displayLives, setDisplayLives] = useState(MAX_LIVES);
-  const [displayCombo, setDisplayCombo] = useState(0);
-  const [displayJudge, setDisplayJudge] = useState("");
-  const [judgeKey, setJudgeKey] = useState(0);
-  const [muteState, setMuteState] = useState(true);
+  const [screen,          setScreen]          = useState<"select" | "game">("select");
+  const [displayScore,    setDisplayScore]    = useState(0);
+  const [displayPhase,    setDisplayPhase]    = useState<"idle" | "playing" | "gameover">("idle");
+  const [displayLives,    setDisplayLives]    = useState(MAX_LIVES);
+  const [displayCombo,    setDisplayCombo]    = useState(0);
+  const [displayJudge,    setDisplayJudge]    = useState("");
+  const [judgeKey,        setJudgeKey]        = useState(0);
+  const [muteState,       setMuteState]       = useState(true);
   const [activeSongTitle, setActiveSongTitle] = useState("");
-  const [highScores, setHighScores] = useState<Record<string, number>>({});
+  const [highScores,      setHighScores]      = useState<Record<string, number>>({});
 
-  // Per-song high scores in localStorage
   const loadHighScores = useCallback((): Record<string, number> => {
     const result: Record<string, number> = {};
     for (const song of SONGS) {
@@ -224,12 +216,9 @@ export default function App() {
     }
   }, []);
 
-  // Global high score for topbar
   const [, updateGlobalHigh] = useHighScore("beatstar_global");
 
-  useEffect(() => {
-    setHighScores(loadHighScores());
-  }, [loadHighScores]);
+  useEffect(() => { setHighScores(loadHighScores()); }, [loadHighScores]);
 
   // ── Resize canvas ──────────────────────────────────────────────────────────
   const resizeCanvas = useCallback(() => {
@@ -237,7 +226,7 @@ export default function App() {
     if (!canvas) return;
     const parent = canvas.parentElement;
     if (!parent) return;
-    canvas.width = parent.clientWidth;
+    canvas.width  = parent.clientWidth;
     canvas.height = parent.clientHeight;
   }, []);
 
@@ -262,9 +251,10 @@ export default function App() {
       if (s.phase !== "playing") return;
 
       const canvas = canvasRef.current;
-      const w = canvas?.width ?? 400;
+      const w = canvas?.width  ?? 400;
       const h = canvas?.height ?? 700;
 
+      // Find the closest star in this lane within the hit window
       let best: FallingStar | null = null;
       let bestDist = Infinity;
       for (const star of s.stars) {
@@ -276,38 +266,29 @@ export default function App() {
         }
       }
 
-      const cx = getLaneX(lane, w);
-      const cy = HIT_ZONE * h;
-
       if (!best) return;
 
       best.hit = true;
       best.hitTime = s.time;
 
       const isPerfect = bestDist < PERFECT_WINDOW;
-      const pts = isPerfect ? 300 : 100;
+      const pts   = isPerfect ? 300 : 100;
       const label = isPerfect ? "✦ PERFECT!" : "GOOD";
-      const col = isPerfect ? "#f59e0b" : "#6366f1";
+      const col   = isPerfect ? "#f59e0b" : "#6366f1";
 
-      s.score += pts * Math.max(1, s.combo);
-      s.combo += 1;
-      s.maxCombo = Math.max(s.maxCombo, s.combo);
-      s.lastJudge = label;
+      s.score     += pts * Math.max(1, s.combo);
+      s.combo     += 1;
+      s.maxCombo   = Math.max(s.maxCombo, s.combo);
+      s.lastJudge  = label;
 
-      s.effects.push({
-        id: nextId++,
-        lane,
-        y: cy,
-        label,
-        color: col,
-        alpha: 1,
-        vy: -65,
-      });
+      const cx = getLaneX(lane, w);
+      const cy = HIT_ZONE * h;
 
+      s.effects.push({ id: nextId++, lane, y: cy, label, color: col, alpha: 1, vy: -65 });
       spawnParticles(s.particles, cx, cy, best.color, isPerfect ? 18 : 9);
 
       if (isPerfect) playPerfect();
-      else playGood();
+      else           playGood();
 
       setDisplayScore(s.score);
       setDisplayCombo(s.combo);
@@ -317,20 +298,18 @@ export default function App() {
     [getLaneX]
   );
 
-  // ── Note callback: spawn a star timed to arrive at hit zone ───────────────
+  // ── Note callback: spawn star NOW, audio plays TRAVEL_TIME seconds later ──
   const handleNote = useCallback(
     (note: SongNote, _idx: number) => {
       const s = stateRef.current;
       if (s.phase !== "playing") return;
-      const lane = (note.lane % LANES) as StarLane;
+      const lane  = (note.lane % LANES) as StarLane;
       const color = STAR_COLORS[lane] ?? "#f59e0b";
-      // Speed = HIT_ZONE / TRAVEL_TIME  (normalized units per second)
-      const speed = HIT_ZONE / TRAVEL_TIME;
       s.stars.push({
         id: nextId++,
         lane,
-        y: -0.04,
-        speed,
+        y: 0,           // start at top
+        speed: STAR_SPEED,
         hit: false,
         missed: false,
         hitTime: 0,
@@ -343,7 +322,6 @@ export default function App() {
 
   // ── Keyboard input ─────────────────────────────────────────────────────────
   useEffect(() => {
-    const s = stateRef.current;
     const onKey = (e: KeyboardEvent) => {
       const key = e.key.toLowerCase();
       const idx = LANE_KEYS.indexOf(key);
@@ -351,16 +329,17 @@ export default function App() {
         resumeAudio();
         hitLane(idx as StarLane);
       }
-      if ((key === " " || key === "enter") && s.phase === "gameover") {
+      if ((key === " " || key === "enter") && stateRef.current.phase === "gameover") {
         resumeAudio();
         returnToSelect();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [hitLane]);
 
-  // ── Start game with a song ─────────────────────────────────────────────────
+  // ── Start game ─────────────────────────────────────────────────────────────
   const startGame = useCallback(
     (song: Song) => {
       resumeAudio();
@@ -379,7 +358,6 @@ export default function App() {
       setActiveSongTitle(song.title);
       setScreen("game");
 
-      // Register note callback BEFORE starting song
       setNoteCallback(handleNote);
       startSong(song);
     },
@@ -399,24 +377,25 @@ export default function App() {
   useGameLoop(
     useCallback(
       (dt: number) => {
-        const s = stateRef.current;
+        const s      = stateRef.current;
         const canvas = canvasRef.current;
         if (!canvas || screen !== "game") return;
-        const ctx = canvas.getContext("2d");
-        if (!ctx) return;
-        const w = canvas.width;
-        const h = canvas.height;
+        const ctx2d = canvas.getContext("2d");
+        if (!ctx2d) return;
+        const w    = canvas.width;
+        const h    = canvas.height;
         const song = activeSongRef.current;
 
-        // ── Update ──────────────────────────────────────────────────────────
+        // ── Update ────────────────────────────────────────────────────────
         if (s.phase === "playing") {
           s.time += dt;
 
-          // Move stars
+          // Move stars downward
           for (const star of s.stars) {
             if (!star.hit && !star.missed) {
               star.y += star.speed * dt;
-              if (star.y > HIT_ZONE + GOOD_WINDOW + 0.03) {
+              // Miss: star passed the hit zone without being tapped
+              if (star.y > HIT_ZONE + GOOD_WINDOW + 0.04) {
                 star.missed = true;
                 s.combo = 0;
                 s.lives -= 1;
@@ -438,24 +417,24 @@ export default function App() {
             }
           }
 
-          // Remove old stars
+          // Remove expired stars
           s.stars = s.stars.filter(
             (st) =>
-              !(st.hit && s.time - st.hitTime > 0.45) &&
-              !(st.missed && st.y > 1.2)
+              !(st.hit    && s.time - st.hitTime > 0.45) &&
+              !(st.missed && st.y > 1.15)
           );
 
-          // Update effects
+          // Update floating text effects
           for (const ef of s.effects) {
-            ef.y += ef.vy * dt;
+            ef.y    += ef.vy * dt;
             ef.alpha -= 2.0 * dt;
           }
           s.effects = s.effects.filter((ef) => ef.alpha > 0);
 
           // Update particles
           for (const p of s.particles) {
-            p.x += p.vx * dt;
-            p.y += p.vy * dt;
+            p.x  += p.vx * dt;
+            p.y  += p.vy * dt;
             p.vy += 220 * dt;
             p.alpha -= 1.6 * dt;
           }
@@ -472,180 +451,173 @@ export default function App() {
           }
         }
 
-        // ── Render ──────────────────────────────────────────────────────────
-        const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        // ── Render ────────────────────────────────────────────────────────
+        const isDark    = window.matchMedia("(prefers-color-scheme: dark)").matches;
         const songColor = song?.color ?? "#6366f1";
 
-        ctx.clearRect(0, 0, w, h);
+        ctx2d.clearRect(0, 0, w, h);
 
-        // Background gradient
-        const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
+        // Background
+        const bgGrad = ctx2d.createLinearGradient(0, 0, 0, h);
         bgGrad.addColorStop(0, isDark ? "#0a0a18" : "#f0f4ff");
         bgGrad.addColorStop(1, isDark ? "#150520" : "#ede0ff");
-        ctx.fillStyle = bgGrad;
-        ctx.fillRect(0, 0, w, h);
+        ctx2d.fillStyle = bgGrad;
+        ctx2d.fillRect(0, 0, w, h);
 
         const laneW = w / LANES;
 
         // Lane tints
         for (let i = 0; i < LANES; i++) {
           const col = STAR_COLORS[i] ?? "#fff";
-          const g = ctx.createLinearGradient(i * laneW, 0, (i + 1) * laneW, 0);
-          g.addColorStop(0, "transparent");
+          const g = ctx2d.createLinearGradient(i * laneW, 0, (i + 1) * laneW, 0);
+          g.addColorStop(0,   "transparent");
           g.addColorStop(0.5, isDark ? `${col}15` : `${col}20`);
-          g.addColorStop(1, "transparent");
-          ctx.fillStyle = g;
-          ctx.fillRect(i * laneW, 0, laneW, h);
+          g.addColorStop(1,   "transparent");
+          ctx2d.fillStyle = g;
+          ctx2d.fillRect(i * laneW, 0, laneW, h);
         }
 
-        // Lane separators
+        // Lane dividers
         for (let i = 1; i < LANES; i++) {
-          ctx.beginPath();
-          ctx.moveTo(i * laneW, 0);
-          ctx.lineTo(i * laneW, h);
-          ctx.strokeStyle = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)";
-          ctx.lineWidth = 1;
-          ctx.stroke();
+          ctx2d.beginPath();
+          ctx2d.moveTo(i * laneW, 0);
+          ctx2d.lineTo(i * laneW, h);
+          ctx2d.strokeStyle = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)";
+          ctx2d.lineWidth = 1;
+          ctx2d.stroke();
         }
 
-        // Scrolling note highway lines
-        const lineAlpha = isDark ? 0.04 : 0.03;
+        // Scrolling speed lines
         for (let i = 0; i < 20; i++) {
           const lineY = ((s.time * 120 + i * (h / 10)) % h);
-          ctx.beginPath();
-          ctx.moveTo(0, lineY);
-          ctx.lineTo(w, lineY);
-          ctx.strokeStyle = `rgba(255,255,255,${lineAlpha})`;
-          ctx.lineWidth = 1;
-          ctx.stroke();
+          ctx2d.beginPath();
+          ctx2d.moveTo(0, lineY);
+          ctx2d.lineTo(w, lineY);
+          ctx2d.strokeStyle = isDark ? "rgba(255,255,255,0.03)" : "rgba(0,0,0,0.025)";
+          ctx2d.lineWidth = 1;
+          ctx2d.stroke();
         }
 
-        // Hit zone line
+        // ── Hit zone line ────────────────────────────────────────────────
         const hitY = HIT_ZONE * h;
-        const lg = ctx.createLinearGradient(0, hitY, w, hitY);
-        lg.addColorStop(0, "transparent");
-        lg.addColorStop(0.15, isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.25)");
-        lg.addColorStop(0.85, isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.25)");
-        lg.addColorStop(1, "transparent");
-        ctx.beginPath();
-        ctx.moveTo(0, hitY);
-        ctx.lineTo(w, hitY);
-        ctx.strokeStyle = lg;
-        ctx.lineWidth = 2;
-        ctx.stroke();
+        const lg = ctx2d.createLinearGradient(0, hitY, w, hitY);
+        lg.addColorStop(0,    "transparent");
+        lg.addColorStop(0.15, isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.28)");
+        lg.addColorStop(0.85, isDark ? "rgba(255,255,255,0.55)" : "rgba(0,0,0,0.28)");
+        lg.addColorStop(1,    "transparent");
+        ctx2d.beginPath();
+        ctx2d.moveTo(0, hitY);
+        ctx2d.lineTo(w, hitY);
+        ctx2d.strokeStyle = lg;
+        ctx2d.lineWidth = 2;
+        ctx2d.stroke();
 
-        // Hit zone circles
+        // Hit zone circles per lane
         for (let i = 0; i < LANES; i++) {
-          const cx = getLaneX(i, w);
+          const cx  = getLaneX(i, w);
           const col = STAR_COLORS[i] ?? "#fff";
-          // Outer ring
-          ctx.beginPath();
-          ctx.arc(cx, hitY, 24, 0, Math.PI * 2);
-          ctx.strokeStyle = col;
-          ctx.globalAlpha = 0.45;
-          ctx.lineWidth = 2;
-          ctx.stroke();
-          ctx.globalAlpha = 1;
-          // Inner fill
-          ctx.beginPath();
-          ctx.arc(cx, hitY, 10, 0, Math.PI * 2);
-          ctx.fillStyle = `${col}44`;
-          ctx.fill();
-          // Key label
-          drawText(ctx, LANE_LABELS[i] ?? "", cx, hitY + 40, {
+          ctx2d.beginPath();
+          ctx2d.arc(cx, hitY, 26, 0, Math.PI * 2);
+          ctx2d.strokeStyle = col;
+          ctx2d.globalAlpha = 0.45;
+          ctx2d.lineWidth = 2;
+          ctx2d.stroke();
+          ctx2d.globalAlpha = 1;
+          ctx2d.beginPath();
+          ctx2d.arc(cx, hitY, 10, 0, Math.PI * 2);
+          ctx2d.fillStyle = `${col}44`;
+          ctx2d.fill();
+          drawText(ctx2d, LANE_LABELS[i] ?? "", cx, hitY + 44, {
             font: "bold 13px Manrope, sans-serif",
-            color: isDark ? "rgba(255,255,255,0.38)" : "rgba(0,0,0,0.32)",
+            color: isDark ? "rgba(255,255,255,0.35)" : "rgba(0,0,0,0.3)",
           });
         }
 
         // Particles
         for (const p of s.particles) {
-          ctx.save();
-          ctx.globalAlpha = p.alpha;
-          ctx.beginPath();
-          ctx.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
-          ctx.fillStyle = p.color;
-          ctx.shadowColor = p.color;
-          ctx.shadowBlur = 8;
-          ctx.fill();
-          ctx.restore();
+          ctx2d.save();
+          ctx2d.globalAlpha = p.alpha;
+          ctx2d.beginPath();
+          ctx2d.arc(p.x, p.y, p.radius, 0, Math.PI * 2);
+          ctx2d.fillStyle   = p.color;
+          ctx2d.shadowColor = p.color;
+          ctx2d.shadowBlur  = 8;
+          ctx2d.fill();
+          ctx2d.restore();
         }
 
         // Stars
         for (const star of s.stars) {
           if (star.missed) continue;
-          const cx = getLaneX(star.lane, w);
-          const cy = star.y * h;
+          const cx  = getLaneX(star.lane, w);
+          const cy  = star.y * h;
           const age = star.hit ? s.time - star.hitTime : 0;
           const alpha = star.hit ? Math.max(0, 1 - age * 5) : 1;
-          const r = star.hit ? 18 + age * 80 : 18;
-
-          if (!star.hit) {
-            drawGlow(ctx, cx, cy, 38, star.color);
-          }
-          drawStar5(ctx, cx, cy, r, star.color, alpha);
+          const r     = star.hit ? 18 + age * 80 : 18;
+          if (!star.hit) drawGlow(ctx2d, cx, cy, 38, star.color);
+          drawStar5(ctx2d, cx, cy, r, star.color, alpha);
         }
 
-        // Hit effects text
+        // Floating judge text
         for (const ef of s.effects) {
           const cx = getLaneX(ef.lane, w);
-          ctx.globalAlpha = ef.alpha;
-          drawText(ctx, ef.label, cx, ef.y, {
+          ctx2d.globalAlpha = ef.alpha;
+          drawText(ctx2d, ef.label, cx, ef.y, {
             font: "bold 20px Fraunces, serif",
             color: ef.color,
             shadow: ef.color,
             shadowBlur: 14,
           });
-          ctx.globalAlpha = 1;
+          ctx2d.globalAlpha = 1;
         }
 
-        // Song title watermark (top center, faint)
+        // Song watermark
         if (s.phase === "playing" && song) {
-          drawText(ctx, `♪ ${song.title}`, w / 2, 18, {
+          drawText(ctx2d, `♪ ${song.title}`, w / 2, 18, {
             font: "13px Manrope, sans-serif",
-            color: isDark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.2)",
+            color: isDark ? "rgba(255,255,255,0.2)" : "rgba(0,0,0,0.18)",
           });
         }
 
-        // Game over overlay
+        // ── Game over overlay ────────────────────────────────────────────
         if (s.phase === "gameover") {
-          ctx.save();
-          ctx.fillStyle = isDark ? "rgba(0,0,0,0.72)" : "rgba(255,255,255,0.78)";
-          ctx.fillRect(0, 0, w, h);
-          ctx.restore();
+          ctx2d.save();
+          ctx2d.fillStyle = isDark ? "rgba(0,0,0,0.72)" : "rgba(255,255,255,0.78)";
+          ctx2d.fillRect(0, 0, w, h);
+          ctx2d.restore();
 
-          drawText(ctx, "GAME OVER", w / 2, h / 2 - 90, {
+          drawText(ctx2d, "GAME OVER", w / 2, h / 2 - 90, {
             font: "bold 44px Fraunces, serif",
             color: "#ef4444",
             shadow: "#ef4444",
             shadowBlur: 28,
           });
           if (song) {
-            drawText(ctx, `♪ ${song.title}`, w / 2, h / 2 - 44, {
+            drawText(ctx2d, `♪ ${song.title}`, w / 2, h / 2 - 44, {
               font: "18px Manrope, sans-serif",
               color: songColor,
               shadow: songColor,
               shadowBlur: 10,
             });
           }
-          drawText(ctx, `Score: ${s.score.toLocaleString()}`, w / 2, h / 2 + 4, {
+          drawText(ctx2d, `Score: ${s.score.toLocaleString()}`, w / 2, h / 2 + 4, {
             font: "bold 30px Manrope, sans-serif",
             color: isDark ? "#fff" : "#111",
           });
-          drawText(ctx, `Best Combo: ${s.maxCombo}×`, w / 2, h / 2 + 44, {
+          drawText(ctx2d, `Best Combo: ${s.maxCombo}×`, w / 2, h / 2 + 44, {
             font: "20px Manrope, sans-serif",
             color: isDark ? "rgba(255,255,255,0.65)" : "#555",
           });
           const hs = song ? (highScores[song.id] ?? 0) : 0;
           if (hs > 0) {
-            drawText(ctx, `High Score: ${Math.max(hs, s.score).toLocaleString()}`, w / 2, h / 2 + 82, {
+            drawText(ctx2d, `High Score: ${Math.max(hs, s.score).toLocaleString()}`, w / 2, h / 2 + 82, {
               font: "17px Manrope, sans-serif",
               color: "#f59e0b",
               shadow: "#f59e0b",
               shadowBlur: 10,
             });
           }
-          drawText(ctx, "Tap to choose another song", w / 2, h / 2 + 130, {
+          drawText(ctx2d, "Tap to choose another song", w / 2, h / 2 + 130, {
             font: "15px Manrope, sans-serif",
             color: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.4)",
           });
@@ -668,18 +640,17 @@ export default function App() {
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
-      const x = clientX - rect.left;
+      const x    = clientX - rect.left;
       const lane = Math.floor((x / canvas.width) * LANES) as StarLane;
       if (lane >= 0 && lane < LANES) hitLane(lane);
     },
     [hitLane, returnToSelect]
   );
 
-  const handleMouseDown = useCallback(
-    (e: React.MouseEvent) => handleCanvasTap(e.clientX, e.clientY),
+  const handleMouseDown  = useCallback(
+    (e: React.MouseEvent)  => handleCanvasTap(e.clientX, e.clientY),
     [handleCanvasTap]
   );
-
   const handleTouchStart = useCallback(
     (e: React.TouchEvent) => {
       e.preventDefault();
@@ -688,7 +659,6 @@ export default function App() {
     [handleCanvasTap]
   );
 
-  // ── Mute ──────────────────────────────────────────────────────────────────
   const handleMute = useCallback(() => {
     resumeAudio();
     const m = toggleMute();
@@ -732,7 +702,10 @@ export default function App() {
                   <span
                     key={i}
                     className="text-lg leading-none"
-                    style={{ opacity: i < displayLives ? 1 : 0.15, filter: i < displayLives ? "drop-shadow(0 0 4px #f59e0b)" : "none" }}
+                    style={{
+                      opacity: i < displayLives ? 1 : 0.15,
+                      filter:  i < displayLives ? "drop-shadow(0 0 4px #f59e0b)" : "none",
+                    }}
                   >
                     ★
                   </span>
@@ -763,7 +736,9 @@ export default function App() {
                 fontFamily: "Fraunces, serif",
                 fontSize: "1.35rem",
                 fontWeight: "bold",
-                color: displayJudge.includes("PERFECT") ? "#f59e0b" : displayJudge === "MISS" ? "#ef4444" : "#6366f1",
+                color: displayJudge.includes("PERFECT") ? "#f59e0b"
+                     : displayJudge === "MISS"          ? "#ef4444"
+                     : "#6366f1",
                 textShadow: "0 0 16px currentColor",
                 animation: "fadeUp 0.55s ease-out forwards",
               }}
@@ -772,7 +747,7 @@ export default function App() {
             </div>
           )}
 
-          {/* Back button */}
+          {/* Back to song list */}
           <button
             onClick={() => { stopSong(); setNoteCallback(null); returnToSelect(); }}
             className="absolute top-2 right-14 h-9 px-3 rounded-full text-xs font-bold flex items-center"
@@ -785,7 +760,7 @@ export default function App() {
             ← Songs
           </button>
 
-          {/* Mute */}
+          {/* Mute toggle */}
           <button
             onClick={handleMute}
             className="absolute top-2 right-2 w-10 h-9 rounded-full flex items-center justify-center text-base"
