@@ -9,6 +9,7 @@ export interface FallingStar {
   missed: boolean;
   hitTime: number;  // timestamp when hit (for animation)
   color: string;
+  freq: number;     // note frequency (for visual tuning)
 }
 
 export interface HitEffect {
@@ -44,9 +45,7 @@ export interface GameState {
   effects: HitEffect[];
   particles: Particle[];
   time: number;
-  bpm: number;
-  beatInterval: number;
-  nextBeat: number;
   level: number;
   lastJudge: string;
+  songId: string;
 }

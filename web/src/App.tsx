@@ -8,26 +8,31 @@ import {
   playPerfect,
   playGood,
   playMiss,
-  playTick,
-  isMuted,
+  playMenuClick,
   toggleMute,
+  startSong,
+  stopSong,
+  setNoteCallback,
 } from "./lib/audio";
+import { SONGS } from "./lib/songs";
+import type { Song, SongNote } from "./lib/songs";
 import type { FallingStar, HitEffect, Particle, GameState, StarLane } from "./types";
 
-// ─── Constants ───────────────────────────────────────────────────────────────
+// ─── Constants ────────────────────────────────────────────────────────────────
 const LANES = 4;
-const HIT_ZONE = 0.88;        // normalized y of the hit line
-const PERFECT_WINDOW = 0.06;  // ±6% of height
-const GOOD_WINDOW = 0.12;
-const INITIAL_BPM = 80;
+const HIT_ZONE = 0.86;
+const PERFECT_WINDOW = 0.07;
+const GOOD_WINDOW = 0.13;
 const STAR_COLORS = ["#f59e0b", "#ec4899", "#6366f1", "#10b981"];
 const LANE_KEYS = ["a", "s", "k", "l"];
 const LANE_LABELS = ["A", "S", "K", "L"];
 const MAX_LIVES = 5;
+// Travel time: star spawns and arrives at hit zone in this many seconds
+const TRAVEL_TIME = 1.8;
 
 let nextId = 1;
 
-function makeState(): GameState {
+function makeState(songId = ""): GameState {
   return {
     phase: "idle",
     score: 0,
@@ -38,26 +43,9 @@ function makeState(): GameState {
     effects: [],
     particles: [],
     time: 0,
-    bpm: INITIAL_BPM,
-    beatInterval: 60 / INITIAL_BPM,
-    nextBeat: 0.5,
     level: 1,
     lastJudge: "",
-  };
-}
-
-function spawnStar(state: GameState): FallingStar {
-  const lane = Math.floor(Math.random() * LANES) as StarLane;
-  const speed = 0.28 + (state.level - 1) * 0.025;
-  return {
-    id: nextId++,
-    lane,
-    y: -0.05,
-    speed,
-    hit: false,
-    missed: false,
-    hitTime: 0,
-    color: STAR_COLORS[lane] ?? "#f59e0b",
+    songId,
   };
 }
 
@@ -70,13 +58,13 @@ function spawnParticles(
 ): void {
   for (let i = 0; i < count; i++) {
     const angle = (Math.PI * 2 * i) / count + Math.random() * 0.5;
-    const speed = 60 + Math.random() * 80;
+    const speed = 60 + Math.random() * 90;
     particles.push({
       id: nextId++,
       x: cx,
       y: cy,
       vx: Math.cos(angle) * speed,
-      vy: Math.sin(angle) * speed,
+      vy: Math.sin(angle) * speed - 30,
       alpha: 1,
       radius: 3 + Math.random() * 4,
       color,
@@ -85,7 +73,7 @@ function spawnParticles(
 }
 
 // ─── Draw helpers ─────────────────────────────────────────────────────────────
-function drawStar(
+function drawStar5(
   ctx: CanvasRenderingContext2D,
   cx: number,
   cy: number,
@@ -97,35 +85,151 @@ function drawStar(
   ctx.globalAlpha = alpha;
   ctx.beginPath();
   for (let i = 0; i < 5; i++) {
-    const outerAngle = (Math.PI * 2 * i) / 5 - Math.PI / 2;
-    const innerAngle = outerAngle + Math.PI / 5;
-    const ox = cx + Math.cos(outerAngle) * r;
-    const oy = cy + Math.sin(outerAngle) * r;
-    const ix = cx + Math.cos(innerAngle) * (r * 0.42);
-    const iy = cy + Math.sin(innerAngle) * (r * 0.42);
-    if (i === 0) ctx.moveTo(ox, oy);
-    else ctx.lineTo(ox, oy);
-    ctx.lineTo(ix, iy);
+    const outerA = (Math.PI * 2 * i) / 5 - Math.PI / 2;
+    const innerA = outerA + Math.PI / 5;
+    if (i === 0) ctx.moveTo(cx + Math.cos(outerA) * r, cy + Math.sin(outerA) * r);
+    else ctx.lineTo(cx + Math.cos(outerA) * r, cy + Math.sin(outerA) * r);
+    ctx.lineTo(cx + Math.cos(innerA) * (r * 0.42), cy + Math.sin(innerA) * (r * 0.42));
   }
   ctx.closePath();
   ctx.fillStyle = color;
   ctx.shadowColor = color;
-  ctx.shadowBlur = 18;
+  ctx.shadowBlur = 20;
   ctx.fill();
   ctx.restore();
+}
+
+// ─── Song Selection Screen ────────────────────────────────────────────────────
+function SongSelect({
+  onSelect,
+  highScores,
+}: {
+  onSelect: (song: Song) => void;
+  highScores: Record<string, number>;
+}) {
+  return (
+    <div
+      className="flex flex-col h-full overflow-y-auto"
+      style={{ background: "var(--paper)", color: "var(--ink)" }}
+    >
+      {/* Header */}
+      <div className="text-center pt-6 pb-4 px-4">
+        <h1
+          className="text-4xl font-bold mb-1"
+          style={{ fontFamily: "Fraunces, serif", color: "#f59e0b", textShadow: "0 0 20px #f59e0b88" }}
+        >
+          ✦ Beat Star
+        </h1>
+        <p className="text-sm" style={{ color: "var(--muted)" }}>
+          Choose a song and tap the falling stars!
+        </p>
+      </div>
+
+      {/* Song cards */}
+      <div className="flex flex-col gap-3 px-4 pb-6">
+        {SONGS.map((song) => {
+          const hs = highScores[song.id] ?? 0;
+          return (
+            <button
+              key={song.id}
+              onClick={() => onSelect(song)}
+              className="flex items-center gap-4 rounded-2xl p-4 text-left transition-transform active:scale-95"
+              style={{
+                background: `linear-gradient(135deg, ${song.color}22 0%, ${song.color}11 100%)`,
+                border: `2px solid ${song.color}55`,
+                minHeight: 72,
+              }}
+            >
+              {/* Color dot */}
+              <div
+                className="rounded-full flex-shrink-0 flex items-center justify-center text-2xl"
+                style={{
+                  width: 52,
+                  height: 52,
+                  background: `${song.color}33`,
+                  border: `2px solid ${song.color}88`,
+                  boxShadow: `0 0 14px ${song.color}55`,
+                }}
+              >
+                {song.id === "ode" ? "🎼" :
+                 song.id === "furelise" ? "🎹" :
+                 song.id === "canon" ? "🎻" :
+                 song.id === "twinkle" ? "⭐" :
+                 song.id === "rock" ? "🎸" : "🎂"}
+              </div>
+
+              <div className="flex-1 min-w-0">
+                <div
+                  className="font-bold text-base truncate"
+                  style={{ fontFamily: "Fraunces, serif", color: song.color }}
+                >
+                  {song.title}
+                </div>
+                <div className="text-sm" style={{ color: "var(--muted)" }}>
+                  {song.artist} · {song.bpm} BPM
+                </div>
+                {hs > 0 && (
+                  <div className="text-xs mt-0.5" style={{ color: song.color, opacity: 0.8 }}>
+                    Best: {hs.toLocaleString()}
+                  </div>
+                )}
+              </div>
+
+              <div
+                className="text-lg flex-shrink-0"
+                style={{ color: song.color }}
+              >
+                ▶
+              </div>
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
 }
 
 // ─── Main App ─────────────────────────────────────────────────────────────────
 export default function App() {
   const canvasRef = useRef<HTMLCanvasElement>(null);
   const stateRef = useRef<GameState>(makeState());
+  const activeSongRef = useRef<Song | null>(null);
+
+  const [screen, setScreen] = useState<"select" | "game">("select");
   const [displayScore, setDisplayScore] = useState(0);
   const [displayPhase, setDisplayPhase] = useState<"idle" | "playing" | "gameover">("idle");
   const [displayLives, setDisplayLives] = useState(MAX_LIVES);
   const [displayCombo, setDisplayCombo] = useState(0);
   const [displayJudge, setDisplayJudge] = useState("");
+  const [judgeKey, setJudgeKey] = useState(0);
   const [muteState, setMuteState] = useState(true);
-  const [highScore, updateHighScore] = useHighScore("beatstar_highscore");
+  const [activeSongTitle, setActiveSongTitle] = useState("");
+  const [highScores, setHighScores] = useState<Record<string, number>>({});
+
+  // Per-song high scores in localStorage
+  const loadHighScores = useCallback((): Record<string, number> => {
+    const result: Record<string, number> = {};
+    for (const song of SONGS) {
+      const raw = localStorage.getItem(`beatstar_hs_${song.id}`);
+      result[song.id] = raw ? parseInt(raw, 10) : 0;
+    }
+    return result;
+  }, []);
+
+  const saveHighScore = useCallback((songId: string, score: number) => {
+    const current = parseInt(localStorage.getItem(`beatstar_hs_${songId}`) ?? "0", 10);
+    if (score > current) {
+      localStorage.setItem(`beatstar_hs_${songId}`, String(score));
+      setHighScores((prev) => ({ ...prev, [songId]: score }));
+    }
+  }, []);
+
+  // Global high score for topbar
+  const [, updateGlobalHigh] = useHighScore("beatstar_global");
+
+  useEffect(() => {
+    setHighScores(loadHighScores());
+  }, [loadHighScores]);
 
   // ── Resize canvas ──────────────────────────────────────────────────────────
   const resizeCanvas = useCallback(() => {
@@ -161,7 +265,6 @@ export default function App() {
       const w = canvas?.width ?? 400;
       const h = canvas?.height ?? 700;
 
-      // Find closest unhit star in lane within good window
       let best: FallingStar | null = null;
       let bestDist = Infinity;
       for (const star of s.stars) {
@@ -176,10 +279,7 @@ export default function App() {
       const cx = getLaneX(lane, w);
       const cy = HIT_ZONE * h;
 
-      if (!best) {
-        // Empty tap — small penalty feedback
-        return;
-      }
+      if (!best) return;
 
       best.hit = true;
       best.hitTime = s.time;
@@ -194,7 +294,6 @@ export default function App() {
       s.maxCombo = Math.max(s.maxCombo, s.combo);
       s.lastJudge = label;
 
-      // Hit effect
       s.effects.push({
         id: nextId++,
         lane,
@@ -202,10 +301,10 @@ export default function App() {
         label,
         color: col,
         alpha: 1,
-        vy: -60,
+        vy: -65,
       });
 
-      spawnParticles(s.particles, cx, cy, best.color, isPerfect ? 16 : 8);
+      spawnParticles(s.particles, cx, cy, best.color, isPerfect ? 18 : 9);
 
       if (isPerfect) playPerfect();
       else playGood();
@@ -213,8 +312,33 @@ export default function App() {
       setDisplayScore(s.score);
       setDisplayCombo(s.combo);
       setDisplayJudge(label);
+      setJudgeKey((k) => k + 1);
     },
     [getLaneX]
+  );
+
+  // ── Note callback: spawn a star timed to arrive at hit zone ───────────────
+  const handleNote = useCallback(
+    (note: SongNote, _idx: number) => {
+      const s = stateRef.current;
+      if (s.phase !== "playing") return;
+      const lane = (note.lane % LANES) as StarLane;
+      const color = STAR_COLORS[lane] ?? "#f59e0b";
+      // Speed = HIT_ZONE / TRAVEL_TIME  (normalized units per second)
+      const speed = HIT_ZONE / TRAVEL_TIME;
+      s.stars.push({
+        id: nextId++,
+        lane,
+        y: -0.04,
+        speed,
+        hit: false,
+        missed: false,
+        hitTime: 0,
+        color,
+        freq: note.freq,
+      });
+    },
+    []
   );
 
   // ── Keyboard input ─────────────────────────────────────────────────────────
@@ -227,27 +351,49 @@ export default function App() {
         resumeAudio();
         hitLane(idx as StarLane);
       }
-      if (key === " " || key === "enter") {
+      if ((key === " " || key === "enter") && s.phase === "gameover") {
         resumeAudio();
-        if (s.phase === "idle" || s.phase === "gameover") startGame();
+        returnToSelect();
       }
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
   }, [hitLane]);
 
-  // ── Start game ─────────────────────────────────────────────────────────────
-  const startGame = useCallback(() => {
-    resumeAudio();
-    const fresh = makeState();
-    fresh.phase = "playing";
-    stateRef.current = fresh;
-    setDisplayScore(0);
-    setDisplayPhase("playing");
-    setDisplayLives(MAX_LIVES);
-    setDisplayCombo(0);
-    setDisplayJudge("");
-  }, []);
+  // ── Start game with a song ─────────────────────────────────────────────────
+  const startGame = useCallback(
+    (song: Song) => {
+      resumeAudio();
+      stopSong();
+
+      const fresh = makeState(song.id);
+      fresh.phase = "playing";
+      stateRef.current = fresh;
+      activeSongRef.current = song;
+
+      setDisplayScore(0);
+      setDisplayPhase("playing");
+      setDisplayLives(MAX_LIVES);
+      setDisplayCombo(0);
+      setDisplayJudge("");
+      setActiveSongTitle(song.title);
+      setScreen("game");
+
+      // Register note callback BEFORE starting song
+      setNoteCallback(handleNote);
+      startSong(song);
+    },
+    [handleNote]
+  );
+
+  const returnToSelect = useCallback(() => {
+    stopSong();
+    setNoteCallback(null);
+    stateRef.current = makeState();
+    setScreen("select");
+    setDisplayPhase("idle");
+    setHighScores(loadHighScores());
+  }, [loadHighScores]);
 
   // ── Game loop ──────────────────────────────────────────────────────────────
   useGameLoop(
@@ -255,50 +401,22 @@ export default function App() {
       (dt: number) => {
         const s = stateRef.current;
         const canvas = canvasRef.current;
-        if (!canvas) return;
+        if (!canvas || screen !== "game") return;
         const ctx = canvas.getContext("2d");
         if (!ctx) return;
         const w = canvas.width;
         const h = canvas.height;
+        const song = activeSongRef.current;
 
         // ── Update ──────────────────────────────────────────────────────────
         if (s.phase === "playing") {
           s.time += dt;
 
-          // Level up every 20s
-          const newLevel = 1 + Math.floor(s.time / 20);
-          if (newLevel !== s.level) {
-            s.level = newLevel;
-            s.bpm = INITIAL_BPM + (s.level - 1) * 8;
-            s.beatInterval = 60 / s.bpm;
-          }
-
-          // Spawn stars on beat
-          if (s.time >= s.nextBeat) {
-            s.nextBeat += s.beatInterval;
-            playTick(Math.floor(s.time / s.beatInterval) % 4 === 0);
-
-            // Spawn 1–2 stars per beat depending on level
-            const count = s.level >= 4 ? 2 : 1;
-            const usedLanes = new Set<number>();
-            for (let i = 0; i < count; i++) {
-              let lane = Math.floor(Math.random() * LANES);
-              let tries = 0;
-              while (usedLanes.has(lane) && tries < 8) {
-                lane = Math.floor(Math.random() * LANES);
-                tries++;
-              }
-              usedLanes.add(lane);
-              s.stars.push(spawnStar({ ...s, level: s.level }));
-            }
-          }
-
           // Move stars
           for (const star of s.stars) {
             if (!star.hit && !star.missed) {
               star.y += star.speed * dt;
-              // Miss detection
-              if (star.y > HIT_ZONE + GOOD_WINDOW + 0.02 && !star.missed) {
+              if (star.y > HIT_ZONE + GOOD_WINDOW + 0.03) {
                 star.missed = true;
                 s.combo = 0;
                 s.lives -= 1;
@@ -306,6 +424,7 @@ export default function App() {
                 setDisplayLives(s.lives);
                 setDisplayCombo(0);
                 setDisplayJudge("MISS");
+                setJudgeKey((k) => k + 1);
                 s.effects.push({
                   id: nextId++,
                   lane: star.lane,
@@ -321,13 +440,15 @@ export default function App() {
 
           // Remove old stars
           s.stars = s.stars.filter(
-            (st) => !(st.hit && s.time - st.hitTime > 0.4) && !(st.missed && st.y > 1.2)
+            (st) =>
+              !(st.hit && s.time - st.hitTime > 0.45) &&
+              !(st.missed && st.y > 1.2)
           );
 
           // Update effects
           for (const ef of s.effects) {
             ef.y += ef.vy * dt;
-            ef.alpha -= 1.8 * dt;
+            ef.alpha -= 2.0 * dt;
           }
           s.effects = s.effects.filter((ef) => ef.alpha > 0);
 
@@ -335,8 +456,8 @@ export default function App() {
           for (const p of s.particles) {
             p.x += p.vx * dt;
             p.y += p.vy * dt;
-            p.vy += 200 * dt; // gravity
-            p.alpha -= 1.5 * dt;
+            p.vy += 220 * dt;
+            p.alpha -= 1.6 * dt;
           }
           s.particles = s.particles.filter((p) => p.alpha > 0);
 
@@ -344,80 +465,96 @@ export default function App() {
           if (s.lives <= 0) {
             s.phase = "gameover";
             setDisplayPhase("gameover");
-            updateHighScore(s.score);
+            stopSong();
+            setNoteCallback(null);
+            saveHighScore(s.songId, s.score);
+            updateGlobalHigh(s.score);
           }
         }
 
         // ── Render ──────────────────────────────────────────────────────────
-        const isDark =
-          window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const isDark = window.matchMedia("(prefers-color-scheme: dark)").matches;
+        const songColor = song?.color ?? "#6366f1";
 
-        // Background
         ctx.clearRect(0, 0, w, h);
+
+        // Background gradient
         const bgGrad = ctx.createLinearGradient(0, 0, 0, h);
-        bgGrad.addColorStop(0, isDark ? "#0f0f1a" : "#f0f4ff");
-        bgGrad.addColorStop(1, isDark ? "#1a0a2e" : "#e8d5ff");
+        bgGrad.addColorStop(0, isDark ? "#0a0a18" : "#f0f4ff");
+        bgGrad.addColorStop(1, isDark ? "#150520" : "#ede0ff");
         ctx.fillStyle = bgGrad;
         ctx.fillRect(0, 0, w, h);
 
         const laneW = w / LANES;
+
+        // Lane tints
+        for (let i = 0; i < LANES; i++) {
+          const col = STAR_COLORS[i] ?? "#fff";
+          const g = ctx.createLinearGradient(i * laneW, 0, (i + 1) * laneW, 0);
+          g.addColorStop(0, "transparent");
+          g.addColorStop(0.5, isDark ? `${col}15` : `${col}20`);
+          g.addColorStop(1, "transparent");
+          ctx.fillStyle = g;
+          ctx.fillRect(i * laneW, 0, laneW, h);
+        }
 
         // Lane separators
         for (let i = 1; i < LANES; i++) {
           ctx.beginPath();
           ctx.moveTo(i * laneW, 0);
           ctx.lineTo(i * laneW, h);
-          ctx.strokeStyle = isDark
-            ? "rgba(255,255,255,0.07)"
-            : "rgba(0,0,0,0.07)";
+          ctx.strokeStyle = isDark ? "rgba(255,255,255,0.06)" : "rgba(0,0,0,0.06)";
           ctx.lineWidth = 1;
           ctx.stroke();
         }
 
-        // Lane backgrounds (subtle)
-        for (let i = 0; i < LANES; i++) {
-          const col = STAR_COLORS[i] ?? "#fff";
-          const grad = ctx.createLinearGradient(i * laneW, 0, (i + 1) * laneW, 0);
-          grad.addColorStop(0, "transparent");
-          grad.addColorStop(
-            0.5,
-            isDark ? `${col}18` : `${col}22`
-          );
-          grad.addColorStop(1, "transparent");
-          ctx.fillStyle = grad;
-          ctx.fillRect(i * laneW, 0, laneW, h);
+        // Scrolling note highway lines
+        const lineAlpha = isDark ? 0.04 : 0.03;
+        for (let i = 0; i < 20; i++) {
+          const lineY = ((s.time * 120 + i * (h / 10)) % h);
+          ctx.beginPath();
+          ctx.moveTo(0, lineY);
+          ctx.lineTo(w, lineY);
+          ctx.strokeStyle = `rgba(255,255,255,${lineAlpha})`;
+          ctx.lineWidth = 1;
+          ctx.stroke();
         }
 
         // Hit zone line
         const hitY = HIT_ZONE * h;
-        const lineGrad = ctx.createLinearGradient(0, hitY, w, hitY);
-        lineGrad.addColorStop(0, "transparent");
-        lineGrad.addColorStop(0.2, isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.3)");
-        lineGrad.addColorStop(0.8, isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.3)");
-        lineGrad.addColorStop(1, "transparent");
+        const lg = ctx.createLinearGradient(0, hitY, w, hitY);
+        lg.addColorStop(0, "transparent");
+        lg.addColorStop(0.15, isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.25)");
+        lg.addColorStop(0.85, isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.25)");
+        lg.addColorStop(1, "transparent");
         ctx.beginPath();
         ctx.moveTo(0, hitY);
         ctx.lineTo(w, hitY);
-        ctx.strokeStyle = lineGrad;
+        ctx.strokeStyle = lg;
         ctx.lineWidth = 2;
         ctx.stroke();
 
-        // Hit zone circles per lane
+        // Hit zone circles
         for (let i = 0; i < LANES; i++) {
           const cx = getLaneX(i, w);
           const col = STAR_COLORS[i] ?? "#fff";
+          // Outer ring
           ctx.beginPath();
-          ctx.arc(cx, hitY, 22, 0, Math.PI * 2);
+          ctx.arc(cx, hitY, 24, 0, Math.PI * 2);
           ctx.strokeStyle = col;
-          ctx.globalAlpha = 0.5;
+          ctx.globalAlpha = 0.45;
           ctx.lineWidth = 2;
           ctx.stroke();
           ctx.globalAlpha = 1;
-
-          // Key labels
-          drawText(ctx, LANE_LABELS[i] ?? "", cx, hitY + 36, {
-            font: "bold 14px Manrope, sans-serif",
-            color: isDark ? "rgba(255,255,255,0.4)" : "rgba(0,0,0,0.35)",
+          // Inner fill
+          ctx.beginPath();
+          ctx.arc(cx, hitY, 10, 0, Math.PI * 2);
+          ctx.fillStyle = `${col}44`;
+          ctx.fill();
+          // Key label
+          drawText(ctx, LANE_LABELS[i] ?? "", cx, hitY + 40, {
+            font: "bold 13px Manrope, sans-serif",
+            color: isDark ? "rgba(255,255,255,0.38)" : "rgba(0,0,0,0.32)",
           });
         }
 
@@ -439,112 +576,103 @@ export default function App() {
           if (star.missed) continue;
           const cx = getLaneX(star.lane, w);
           const cy = star.y * h;
-          const alpha = star.hit ? Math.max(0, 1 - (s.time - star.hitTime) * 4) : 1;
-          const r = star.hit
-            ? 18 + (s.time - star.hitTime) * 60
-            : 18;
+          const age = star.hit ? s.time - star.hitTime : 0;
+          const alpha = star.hit ? Math.max(0, 1 - age * 5) : 1;
+          const r = star.hit ? 18 + age * 80 : 18;
 
           if (!star.hit) {
-            drawGlow(ctx, cx, cy, 40, star.color);
+            drawGlow(ctx, cx, cy, 38, star.color);
           }
-          drawStar(ctx, cx, cy, r, star.color, alpha);
+          drawStar5(ctx, cx, cy, r, star.color, alpha);
         }
 
-        // Hit effects
+        // Hit effects text
         for (const ef of s.effects) {
           const cx = getLaneX(ef.lane, w);
+          ctx.globalAlpha = ef.alpha;
           drawText(ctx, ef.label, cx, ef.y, {
             font: "bold 20px Fraunces, serif",
             color: ef.color,
             shadow: ef.color,
-            shadowBlur: 12,
+            shadowBlur: 14,
           });
-          ctx.globalAlpha = ef.alpha;
           ctx.globalAlpha = 1;
         }
 
-        // Idle screen
-        if (s.phase === "idle") {
-          ctx.save();
-          ctx.fillStyle = isDark ? "rgba(0,0,0,0.55)" : "rgba(255,255,255,0.6)";
-          ctx.fillRect(0, 0, w, h);
-          ctx.restore();
-
-          drawText(ctx, "BEAT STAR", w / 2, h / 2 - 60, {
-            font: "bold 48px Fraunces, serif",
-            color: "#f59e0b",
-            shadow: "#f59e0b",
-            shadowBlur: 30,
-          });
-          drawText(ctx, "Tap lanes to hit the stars!", w / 2, h / 2, {
-            font: "18px Manrope, sans-serif",
-            color: isDark ? "#fff" : "#333",
-          });
-          drawText(ctx, "Tap here or press SPACE to start", w / 2, h / 2 + 40, {
-            font: "16px Manrope, sans-serif",
-            color: isDark ? "rgba(255,255,255,0.6)" : "rgba(0,0,0,0.5)",
-          });
-          drawText(ctx, "Keys: A  S  K  L", w / 2, h / 2 + 80, {
-            font: "bold 15px Manrope, sans-serif",
-            color: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.4)",
+        // Song title watermark (top center, faint)
+        if (s.phase === "playing" && song) {
+          drawText(ctx, `♪ ${song.title}`, w / 2, 18, {
+            font: "13px Manrope, sans-serif",
+            color: isDark ? "rgba(255,255,255,0.22)" : "rgba(0,0,0,0.2)",
           });
         }
 
-        // Game over screen
+        // Game over overlay
         if (s.phase === "gameover") {
           ctx.save();
-          ctx.fillStyle = isDark ? "rgba(0,0,0,0.7)" : "rgba(255,255,255,0.75)";
+          ctx.fillStyle = isDark ? "rgba(0,0,0,0.72)" : "rgba(255,255,255,0.78)";
           ctx.fillRect(0, 0, w, h);
           ctx.restore();
 
-          drawText(ctx, "GAME OVER", w / 2, h / 2 - 80, {
+          drawText(ctx, "GAME OVER", w / 2, h / 2 - 90, {
             font: "bold 44px Fraunces, serif",
             color: "#ef4444",
             shadow: "#ef4444",
-            shadowBlur: 24,
+            shadowBlur: 28,
           });
-          drawText(ctx, `Score: ${s.score}`, w / 2, h / 2 - 20, {
-            font: "bold 28px Manrope, sans-serif",
+          if (song) {
+            drawText(ctx, `♪ ${song.title}`, w / 2, h / 2 - 44, {
+              font: "18px Manrope, sans-serif",
+              color: songColor,
+              shadow: songColor,
+              shadowBlur: 10,
+            });
+          }
+          drawText(ctx, `Score: ${s.score.toLocaleString()}`, w / 2, h / 2 + 4, {
+            font: "bold 30px Manrope, sans-serif",
             color: isDark ? "#fff" : "#111",
           });
-          drawText(ctx, `Best Combo: ${s.maxCombo}x`, w / 2, h / 2 + 20, {
+          drawText(ctx, `Best Combo: ${s.maxCombo}×`, w / 2, h / 2 + 44, {
             font: "20px Manrope, sans-serif",
-            color: isDark ? "rgba(255,255,255,0.7)" : "#555",
+            color: isDark ? "rgba(255,255,255,0.65)" : "#555",
           });
-          drawText(ctx, `High Score: ${Math.max(highScore, s.score)}`, w / 2, h / 2 + 58, {
-            font: "18px Manrope, sans-serif",
-            color: "#f59e0b",
-            shadow: "#f59e0b",
-            shadowBlur: 10,
-          });
-          drawText(ctx, "Tap or SPACE to play again", w / 2, h / 2 + 108, {
-            font: "16px Manrope, sans-serif",
-            color: isDark ? "rgba(255,255,255,0.5)" : "rgba(0,0,0,0.45)",
+          const hs = song ? (highScores[song.id] ?? 0) : 0;
+          if (hs > 0) {
+            drawText(ctx, `High Score: ${Math.max(hs, s.score).toLocaleString()}`, w / 2, h / 2 + 82, {
+              font: "17px Manrope, sans-serif",
+              color: "#f59e0b",
+              shadow: "#f59e0b",
+              shadowBlur: 10,
+            });
+          }
+          drawText(ctx, "Tap to choose another song", w / 2, h / 2 + 130, {
+            font: "15px Manrope, sans-serif",
+            color: isDark ? "rgba(255,255,255,0.45)" : "rgba(0,0,0,0.4)",
           });
         }
       },
-      [getLaneX, highScore, updateHighScore]
-    )
+      [getLaneX, highScores, saveHighScore, updateGlobalHigh, screen]
+    ),
+    screen !== "game"
   );
 
-  // ── Canvas tap handler ─────────────────────────────────────────────────────
+  // ── Canvas tap ─────────────────────────────────────────────────────────────
   const handleCanvasTap = useCallback(
     (clientX: number, _clientY: number) => {
       resumeAudio();
       const s = stateRef.current;
-      if (s.phase === "idle" || s.phase === "gameover") {
-        startGame();
+      if (s.phase === "gameover") {
+        returnToSelect();
         return;
       }
       const canvas = canvasRef.current;
       if (!canvas) return;
       const rect = canvas.getBoundingClientRect();
       const x = clientX - rect.left;
-      const laneW = canvas.width / LANES;
-      const lane = Math.floor(x / laneW) as StarLane;
+      const lane = Math.floor((x / canvas.width) * LANES) as StarLane;
       if (lane >= 0 && lane < LANES) hitLane(lane);
     },
-    [hitLane, startGame]
+    [hitLane, returnToSelect]
   );
 
   const handleMouseDown = useCallback(
@@ -555,130 +683,128 @@ export default function App() {
   const handleTouchStart = useCallback(
     (e: React.TouchEvent) => {
       e.preventDefault();
-      const touches = Array.from(e.changedTouches);
-      for (const t of touches) {
-        handleCanvasTap(t.clientX, t.clientY);
-      }
+      Array.from(e.changedTouches).forEach((t) => handleCanvasTap(t.clientX, t.clientY));
     },
     [handleCanvasTap]
   );
 
-  // ── Mute toggle ────────────────────────────────────────────────────────────
+  // ── Mute ──────────────────────────────────────────────────────────────────
   const handleMute = useCallback(() => {
     resumeAudio();
     const m = toggleMute();
     setMuteState(m);
   }, []);
 
-  // Sync display phase on mount
-  useEffect(() => {
-    setDisplayPhase(stateRef.current.phase);
-  }, []);
+  const handleSongSelect = useCallback(
+    (song: Song) => {
+      playMenuClick();
+      startGame(song);
+    },
+    [startGame]
+  );
 
   return (
-    <GameShell topbar={<GameTopbar title="Beat Star" score={displayScore} />}>
-      {/* Game canvas */}
-      <div className="relative w-full h-full select-none">
-        <canvas
-          ref={canvasRef}
-          className="absolute inset-0 w-full h-full"
-          onMouseDown={handleMouseDown}
-          onTouchStart={handleTouchStart}
-          style={{ touchAction: "none", cursor: "pointer" }}
+    <GameShell
+      topbar={
+        <GameTopbar
+          title={screen === "game" ? `Beat Star — ${activeSongTitle}` : "Beat Star"}
+          score={displayScore}
         />
+      }
+    >
+      {screen === "select" ? (
+        <SongSelect onSelect={handleSongSelect} highScores={highScores} />
+      ) : (
+        <div className="relative w-full h-full select-none">
+          <canvas
+            ref={canvasRef}
+            className="absolute inset-0 w-full h-full"
+            onMouseDown={handleMouseDown}
+            onTouchStart={handleTouchStart}
+            style={{ touchAction: "none", cursor: "pointer" }}
+          />
 
-        {/* HUD overlays */}
-        {displayPhase === "playing" && (
-          <div className="absolute top-3 left-0 right-0 flex justify-between items-start px-4 pointer-events-none">
-            {/* Lives */}
-            <div className="flex gap-1">
-              {Array.from({ length: MAX_LIVES }).map((_, i) => (
-                <span
-                  key={i}
-                  className="text-xl"
-                  style={{ opacity: i < displayLives ? 1 : 0.2 }}
-                >
-                  ★
-                </span>
-              ))}
-            </div>
-
-            {/* Combo */}
-            {displayCombo >= 2 && (
-              <div
-                className="text-right"
-                style={{ fontFamily: "Fraunces, serif" }}
-              >
-                <div
-                  className="text-2xl font-bold"
-                  style={{ color: "#f59e0b", textShadow: "0 0 12px #f59e0b" }}
-                >
-                  {displayCombo}x
-                </div>
-                <div className="text-xs" style={{ color: "var(--muted)" }}>
-                  COMBO
-                </div>
+          {/* Lives HUD */}
+          {displayPhase === "playing" && (
+            <div className="absolute top-2 left-0 right-0 flex justify-between items-start px-3 pointer-events-none">
+              <div className="flex gap-1">
+                {Array.from({ length: MAX_LIVES }).map((_, i) => (
+                  <span
+                    key={i}
+                    className="text-lg leading-none"
+                    style={{ opacity: i < displayLives ? 1 : 0.15, filter: i < displayLives ? "drop-shadow(0 0 4px #f59e0b)" : "none" }}
+                  >
+                    ★
+                  </span>
+                ))}
               </div>
-            )}
-          </div>
-        )}
 
-        {/* Judge flash */}
-        {displayPhase === "playing" && displayJudge && (
-          <div
-            key={displayJudge + displayScore}
-            className="absolute top-1/3 left-0 right-0 text-center pointer-events-none"
-            style={{
-              fontFamily: "Fraunces, serif",
-              fontSize: "1.4rem",
-              fontWeight: "bold",
-              color:
-                displayJudge.includes("PERFECT")
-                  ? "#f59e0b"
-                  : displayJudge === "MISS"
-                  ? "#ef4444"
-                  : "#6366f1",
-              textShadow: "0 0 16px currentColor",
-              animation: "fadeUp 0.5s ease-out forwards",
-            }}
-          >
-            {displayJudge}
-          </div>
-        )}
+              {displayCombo >= 2 && (
+                <div className="text-right" style={{ fontFamily: "Fraunces, serif" }}>
+                  <div
+                    className="text-2xl font-bold leading-none"
+                    style={{ color: "#f59e0b", textShadow: "0 0 12px #f59e0b" }}
+                  >
+                    {displayCombo}×
+                  </div>
+                  <div className="text-xs" style={{ color: "var(--muted)" }}>COMBO</div>
+                </div>
+              )}
+            </div>
+          )}
 
-        {/* Mute button */}
-        <button
-          onClick={handleMute}
-          className="absolute bottom-4 right-4 w-11 h-11 rounded-full flex items-center justify-center text-xl"
-          style={{
-            background: "var(--surface)",
-            border: "1px solid var(--border)",
-            color: "var(--ink)",
-          }}
-          aria-label={muteState ? "Unmute" : "Mute"}
-        >
-          {muteState ? "🔇" : "🔊"}
-        </button>
+          {/* Judge flash */}
+          {displayPhase === "playing" && (
+            <div
+              key={judgeKey}
+              className="absolute left-0 right-0 text-center pointer-events-none"
+              style={{
+                top: "30%",
+                fontFamily: "Fraunces, serif",
+                fontSize: "1.35rem",
+                fontWeight: "bold",
+                color: displayJudge.includes("PERFECT") ? "#f59e0b" : displayJudge === "MISS" ? "#ef4444" : "#6366f1",
+                textShadow: "0 0 16px currentColor",
+                animation: "fadeUp 0.55s ease-out forwards",
+              }}
+            >
+              {displayJudge}
+            </div>
+          )}
 
-        {/* High score badge */}
-        {highScore > 0 && displayPhase !== "gameover" && (
-          <div
-            className="absolute bottom-4 left-4 text-xs px-3 py-1 rounded-full"
+          {/* Back button */}
+          <button
+            onClick={() => { stopSong(); setNoteCallback(null); returnToSelect(); }}
+            className="absolute top-2 right-14 h-9 px-3 rounded-full text-xs font-bold flex items-center"
             style={{
               background: "var(--surface)",
               border: "1px solid var(--border)",
               color: "var(--muted)",
             }}
           >
-            Best: {highScore}
-          </div>
-        )}
-      </div>
+            ← Songs
+          </button>
+
+          {/* Mute */}
+          <button
+            onClick={handleMute}
+            className="absolute top-2 right-2 w-10 h-9 rounded-full flex items-center justify-center text-base"
+            style={{
+              background: "var(--surface)",
+              border: "1px solid var(--border)",
+              color: "var(--ink)",
+            }}
+            aria-label={muteState ? "Unmute" : "Mute"}
+          >
+            {muteState ? "🔇" : "🔊"}
+          </button>
+        </div>
+      )}
 
       <style>{`
         @keyframes fadeUp {
-          0% { opacity: 1; transform: translateY(0); }
-          100% { opacity: 0; transform: translateY(-30px); }
+          0%   { opacity: 1; transform: translateY(0px); }
+          100% { opacity: 0; transform: translateY(-36px); }
         }
       `}</style>
     </GameShell>
