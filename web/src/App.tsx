@@ -17,7 +17,7 @@ import {
 } from "./lib/audio";
 import { SONGS } from "./lib/songs";
 import type { Song, SongNote } from "./lib/songs";
-import type { FallingStar, HitEffect, Particle, GameState, StarLane } from "./types";
+import type { FallingStar, Particle, GameState, StarLane } from "./types";
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const LANES = 4;
