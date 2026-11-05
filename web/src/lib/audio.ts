@@ -26,8 +26,8 @@ export function getAudioContext(): AudioContext | null {
       ctx = new AudioContext();
       musicGain = ctx.createGain();
       sfxGain = ctx.createGain();
-      musicGain.gain.value = 0.35;
-      sfxGain.gain.value = 0.7;
+      musicGain.gain.value = muted ? 0 : 0.35;
+      sfxGain.gain.value = muted ? 0 : 0.7;
       musicGain.connect(ctx.destination);
       sfxGain.connect(ctx.destination);
     } catch {
@@ -39,13 +39,13 @@ export function getAudioContext(): AudioContext | null {
 
 export function isMuted(): boolean { return muted; }
 
-export function toggleMute(): boolean {
-  muted = !muted;
+/** Driven by the platform topbar Mute button (see SoundBridge in App.tsx). */
+export function setMuted(m: boolean): void {
+  muted = m;
   if (ctx && musicGain && sfxGain) {
     musicGain.gain.value = muted ? 0 : 0.35;
     sfxGain.gain.value   = muted ? 0 : 0.7;
   }
-  return muted;
 }
 
 export function resumeAudio(): void {

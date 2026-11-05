@@ -1,5 +1,5 @@
-import { useCallback, useEffect, useRef, useState } from "react";
-import { GameShell, GameTopbar } from "@freegamestore/games";
+import { useCallback, useEffect, useRef, useState, type RefObject } from "react";
+import { GameShell, GameTopbar, useSound } from "@freegamestore/games";
 import { useGameLoop } from "./hooks/useGameLoop";
 import { useHighScore } from "./hooks/useHighScore";
 import { drawGlow, drawText } from "./lib/canvas";
@@ -9,7 +9,7 @@ import {
   playGood,
   playMiss,
   playMenuClick,
-  toggleMute,
+  setMuted,
   startSong,
   stopSong,
   setNoteCallback,
@@ -18,6 +18,26 @@ import {
 import { SONGS } from "./lib/songs";
 import type { Song, SongNote } from "./lib/songs";
 import type { FallingStar, Particle, GameState, StarLane } from "./types";
+
+// Keeps the Web Audio gains in step with the platform topbar Mute button and
+// hands its toggle to the in-game mute button, so both controls agree.
+function SoundBridge({
+  onChange,
+  toggleRef,
+}: {
+  onChange: (muted: boolean) => void;
+  toggleRef: RefObject<() => void>;
+}) {
+  const { muted, toggle } = useSound();
+  useEffect(() => {
+    setMuted(muted);
+    onChange(muted);
+  }, [muted, onChange]);
+  useEffect(() => {
+    toggleRef.current = toggle;
+  }, [toggle, toggleRef]);
+  return null;
+}
 
 // ─── Constants ────────────────────────────────────────────────────────────────
 const LANES = 4;
@@ -659,10 +679,10 @@ export default function App() {
     [handleCanvasTap]
   );
 
+  const sdkToggle = useRef<() => void>(() => {});
   const handleMute = useCallback(() => {
     resumeAudio();
-    const m = toggleMute();
-    setMuteState(m);
+    sdkToggle.current();
   }, []);
 
   const handleSongSelect = useCallback(
@@ -682,6 +702,7 @@ export default function App() {
         />
       }
     >
+      <SoundBridge onChange={setMuteState} toggleRef={sdkToggle} />
       {screen === "select" ? (
         <SongSelect onSelect={handleSongSelect} highScores={highScores} />
       ) : (
